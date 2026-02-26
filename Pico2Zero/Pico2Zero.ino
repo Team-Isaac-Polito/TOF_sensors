@@ -84,7 +84,7 @@ void loop(){
 
     
 
-    /*
+    
     // Used for debugging:
 
     for (size_t i = 0; i < sensorCount; i++) {
@@ -99,9 +99,9 @@ void loop(){
   else {
     Serial.println("Master: Incomplete data received.");
   }
-  */
+  
  
-} 
+
   // Small delay that can be setted without much restriction.
   delay(50);
 }
