@@ -205,9 +205,9 @@ void loop(){
     counter = 0;
   }
 
-/*
-  // Printing the matrix of measurments just for debugging
 
+  // Printing the matrix of measurments just for debugging
+/*
     for (int r = 0; r < sensorCount; r++) {
       Serial.print("Lettura sensore:");
       Serial.print(r);
