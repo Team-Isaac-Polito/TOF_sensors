@@ -56,7 +56,7 @@
 
 // Comunications' clock
 #define SENSOR_BAUDRATE 400000    // at least 400 kHz for comunication with VL53L1X
-#define BUS_BAUDRATE 100000       // To increase more use pull-up resistors
+#define BUS_BAUDRATE 115200       // To increase more use pull-up resistors
 
 // Definition of the ROI  -> minimum ROI size of 4 
 #define ROI_SIZE 4
@@ -80,9 +80,30 @@ int centers_matrix[MATRIX_SIZE][MATRIX_SIZE] = {
 // Matrice 4x1  ->  useful to measure just an array of distances on a line   ->   case used for the robot. 
 int centers_matrix[MATRIX_SIZE] = {193, 197, 62, 58};
 
-// The number of sensors in your system and definition of the distance matrix that will contain the measurments:
-const uint8_t sensorCount = 2;
+//  SENSOR COUNT change only this number when adding or removing physical sensors (will be recalled for sensorCount later on).
+//  Allowed range: from 1 to MAX_AVAILABLE_SENSORS (should be 7: from 7, 8, 14, 15, 16, 17, 18).
+#define NUM_SENSORS 3
+
+// All GPIO pins available for XSHUT, in priority order.
+// The first NUM_SENSORS entries are used; the rest are ignored.
+// Order: 7, 8, 14, 15, 16, 17, 18 
+// if the number of max sensor available on board needs to be changed, remember to change both MAX_SENSOR and xshutPinPool (with the index of said pins)
+#define MAX_AVAILABLE_SENSORS 7
+const uint8_t xshutPinPool[MAX_AVAILABLE_SENSORS] = { 7, 8, 14, 15, 16, 17, 18 };
+
+#if NUM_SENSORS < 1
+  #error "NUM_SENSORS must be at least 1."
+#endif
+#if NUM_SENSORS > MAX_AVAILABLE_SENSORS
+  #error "NUM_SENSORS exceeds the number of available XSHUT pins in xshutPinPool."
+#endif
+
+// sensorCount mirrors NUM_SENSORS. All previously existing code that references sensorCount continues to work without any other modifications.
+const uint8_t sensorCount = NUM_SENSORS;
 int distance_matrix[sensorCount][MATRIX_SIZE];
+
+// Number of init attempts per sensor before halting:
+#define MAX_INIT_RETRIES 3    
 
 // Mean matrix for filtering:
 int mean_matrix[sensorCount][MATRIX_SIZE][MEAN_DIMENSION];
@@ -97,10 +118,6 @@ const size_t BYTES_TO_SEND = sizeof(distance_matrix);
 // Address of the Slave  (rp2040-zero):
 const int SLAVE_ADDRESS = 0x42;
 
-
-// The slave pin connected to the XSHUT pin of each sensor.
-const uint8_t xshutPins[sensorCount] = { 7, 8 };
-
 // construct of the sensor through Pololu VL53L1X library:
 VL53L1X sensors[sensorCount];
 
@@ -112,8 +129,8 @@ void requestEvent() {
 
 
 void setup(){
-  //while (!Serial) {}    // Used just for debugging
   Serial.begin(115200);
+  //while (!Serial);      // Waits for Serial Monitor - Used for debugging
   Wire.setSDA(4);         // GP4
   Wire.setSCL(5);         // GP5
   Wire.begin();           // I2C0 for TOF comunication  ->  MASTER
@@ -133,24 +150,42 @@ void setup(){
   // Disable/reset all sensors by driving their XSHUT pins low. This way we are able to turn them on one by one and assign an ID.
   for (uint8_t i = 0; i < sensorCount; i++)
   {
-    pinMode(xshutPins[i], OUTPUT);
-    digitalWrite(xshutPins[i], LOW);
+    pinMode(xshutPinPool[i], OUTPUT);
+    digitalWrite(xshutPinPool[i], LOW);
   }
 
   // Enable, initialize, and start each sensor, one by one.
   for (uint8_t i = 0; i < sensorCount; i++)
   {
-    pinMode(xshutPins[i], INPUT);
+    pinMode(xshutPinPool[i], INPUT);
     delay(10);
     sensors[i].setTimeout(500);
-    if (!sensors[i].init())
-    {
-      Serial.print("Failed to detect and initialize sensor ");
-      Serial.println(i);
+
+    // Retry init up to MAX_INIT_RETRIES times before halting.
+    bool initialized = false;
+    for (uint8_t attempt = 0; attempt < MAX_INIT_RETRIES; attempt++) {
+      if (sensors[i].init()) {
+        initialized = true;
+        break;
+      }
+      Serial.print("[WARNING] Sensor ");
+      Serial.print(i);
+      Serial.print(" init failed, retrying (");
+      Serial.print(attempt + 1);
+      Serial.print("/");
+      Serial.print(MAX_INIT_RETRIES);
+      Serial.println(" attempts)...");
+      delay(100);
+    }
+
+    if (!initialized) {
+      Serial.print("[ERROR] Sensor ");
+      Serial.print(i);
+      Serial.print(" failed all retries on XSHUT pin ");
+      Serial.println(xshutPinPool[i]);
+      Serial.println("Halting. Check wiring and power for this sensor.");
       while (1);
     }
-    Serial.print("Initialized sensor ");
-    Serial.println(i);
 
     // Each sensor is assigned with a univoque ID.
     // The default ID is 0x29 (= 41). We set IDs from 0x2A (=42): 
@@ -162,7 +197,16 @@ void setup(){
 
     // Setting ROI size (minimum size of 4 cells):
     sensors[i].setROISize(ROI_SIZE,ROI_SIZE);
+
+    // Confirmation Status Message:
+    Serial.print("  Sensor ");
+    Serial.print(i);
+    Serial.print(" OK - address 0x");
+    Serial.print(0x2A + i, HEX);
+    Serial.print(", XSHUT pin ");
+    Serial.println(xshutPinPool[i]);
   }
+  Serial.println("All sensors initialized. Starting measurements.");
 }
 
 
@@ -205,20 +249,18 @@ void loop(){
     counter = 0;
   }
 
-
-  // Printing the matrix of measurments just for debugging
-/*
-    for (int r = 0; r < sensorCount; r++) {
-      Serial.print("Lettura sensore:");
-      Serial.print(r);
-      Serial.print('\t');
-
-        for (int c = 0; c < MATRIX_SIZE; c++) {
-            Serial.print(distance_matrix[r][c]);
-            Serial.print('\t'); 
-        }
-        Serial.println();
+  // Printing the matrix of measurments - Used for debugging
+/*  
+  for (int r = 0; r < sensorCount; r++) {
+    Serial.print("Lettura sensore:");
+    Serial.print(r);
+    Serial.print('\t');
+    for (int c = 0; c < MATRIX_SIZE; c++) {
+      Serial.print(distance_matrix[r][c]);
+      Serial.print('\t'); 
     }
+    Serial.println();
+  }
 */
 
 }
